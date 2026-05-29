@@ -6,9 +6,9 @@ use Illuminate\Support\Facades\Route;
 
 // ── Public routes ─────────────────────────────────────────────────────────
 Route::get('/', [TaskflowController::class, 'index'])->name('home');
-Route::post('/sso/exchange', [TaskflowController::class, 'ssoExchange'])->name('sso.exchange');
-Route::post('/sso/redirect', [TaskflowController::class, 'ssoRedirect'])->name('sso.redirect');
-Route::get('/sso/redirect', [TaskflowController::class, 'ssoRedirect'])->name('sso.redirect.dev');
+Route::post('/sso/exchange', [TaskflowController::class, 'ssoExchange'])->name('sso.exchange')->block();
+Route::post('/sso/redirect', [TaskflowController::class, 'ssoRedirect'])->name('sso.redirect')->block();
+Route::get('/sso/redirect', [TaskflowController::class, 'ssoRedirect'])->name('sso.redirect.dev')->block();
 Route::match(['get', 'post'], '/logout', [TaskflowController::class, 'logout'])->name('logout');
 
 // ── Authenticated API ─────────────────────────────────────────────────────
@@ -17,7 +17,7 @@ Route::prefix('taskflow/api')
     ->group(function () {
 
         // Bootstrap (single call to hydrate the SPA)
-        Route::get('/bootstrap', [TaskflowController::class, 'bootstrap']);
+        Route::get('/bootstrap', [TaskflowController::class, 'bootstrap'])->block();
 
         // Assignments
         Route::get('/assignments',              [TaskflowController::class, 'indexAssignments']);

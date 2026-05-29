@@ -5,6 +5,8 @@ if (window.__TASKFLOW_LOADED__) {
     console.warn("[taskflow] Already loaded — skipping.");
 } else {
 window.__TASKFLOW_LOADED__ = true;
+window.__TASKFLOW_BOOT_ATTEMPTS__ = 0;
+window.__TASKFLOW_SSO_DETAIL__ = window.__TASKFLOW_SSO_DETAIL__ || null;
 
 // ── Init error ────────────────────────────────────────────────
 function showInitError(msg) {
@@ -18,12 +20,19 @@ window.addEventListener("module:error", e =>
 
 // ── SSO handshake ─────────────────────────────────────────────
 function bootFromPortalUser(detail) {
+    window.__TASKFLOW_BOOT_ATTEMPTS__ += 1;
     const user = (detail && detail.user) || window.PORTAL_USER || null;
     const token = (detail && detail.token) || window.SSO_TOKEN || null;
     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
     if (!csrfMeta) { showInitError("CSRF token missing."); return; }
     if (!token && !(user && user.id)) { showInitError("SSO identity missing."); return; }
     const isEmbedded = !!(detail && detail.embedded) || window.self !== window.top;
+    window.__TASKFLOW_SSO_DETAIL__ = {
+        user: user || null,
+        token: token || null,
+        embedded: isEmbedded,
+        moduleExchangeCompleted: false,
+    };
 
     const url = user && user.id ? "/sso/redirect" : "/sso/exchange";
     const body = user && user.id
@@ -36,9 +45,21 @@ function bootFromPortalUser(detail) {
                    "X-CSRF-TOKEN": csrfMeta.getAttribute("content"), "X-Requested-With": "XMLHttpRequest" },
         body: JSON.stringify(body),
     })
-    .then(r => { if (!r.ok) throw new Error("SSO exchange failed: " + r.status); return r.json(); })
-    .then(j => { if (!j || !j.user) throw new Error("Invalid SSO response"); bootApp(j.user, isEmbedded); })
-    .catch(e => showInitError(e?.message || "Authentication failed."));
+    .then(r => {
+        if (!r.ok) throw new Error("SSO exchange failed: " + r.status);
+        return r.json();
+    })
+    .then(j => {
+        if (!j || !j.user) throw new Error("Invalid SSO response");
+        if (window.__TASKFLOW_SSO_DETAIL__) {
+            window.__TASKFLOW_SSO_DETAIL__.user = j.user;
+            window.__TASKFLOW_SSO_DETAIL__.moduleExchangeCompleted = true;
+        }
+        bootApp(j.user, isEmbedded);
+    })
+    .catch(e => {
+        showInitError(e?.message || "Authentication failed.");
+    });
 }
 window.addEventListener("module:ready", e => bootFromPortalUser(e.detail || {}));
 if (window.__DEORIS_MODULE_READY_DETAIL__ || (window.PORTAL_USER && window.PORTAL_USER.id)) {
@@ -108,13 +129,80 @@ function initials(name) {
 // ── API helper ────────────────────────────────────────────────
 function makeApi(csrf) {
     const BASE = window.TASKFLOW_API_BASE || window.location.origin;
+    let attemptedSessionRepair = false;
+    if (!window.__TASKFLOW_BASE_LOGGED__) {
+        window.__TASKFLOW_BASE_LOGGED__ = true;
+    }
+    async function repairSessionIfNeeded() {
+        if (attemptedSessionRepair) return false;
+        attemptedSessionRepair = true;
+
+        const sso = window.__TASKFLOW_SSO_DETAIL__ || {};
+        const hasUser = !!(sso.user && sso.user.id);
+        const hasToken = !!sso.token;
+        const alreadyExchanged = !!sso.moduleExchangeCompleted;
+        const endpoint = hasUser ? "/sso/redirect" : (hasToken ? "/sso/exchange" : null);
+        if (!endpoint) return false;
+
+
+        const repairBody = hasToken
+            ? { token: sso.token, embedded: !!sso.embedded }
+            : {
+                id: sso.user.id,
+                name: sso.user.name || "",
+                email: sso.user.email || "",
+                role: sso.user.role || "student",
+                embedded: sso.embedded ? "1" : "0",
+            };
+
+        const repaired = await fetch(endpoint, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+                "X-CSRF-TOKEN": csrf || "",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            body: JSON.stringify(repairBody),
+        }).then(r => r.ok).catch(() => false);
+
+
+        return repaired;
+    }
+
     return async function api(method, url, body, isFormData) {
         const headers = { "X-CSRF-TOKEN": csrf, "X-Requested-With": "XMLHttpRequest", Accept: "application/json" };
         if (!isFormData) headers["Content-Type"] = "application/json";
+        if (url.includes("/bootstrap") || url.includes("/sso/")) {
+        }
         const res = await fetch(BASE + url, {
             method, credentials: "include", headers,
             body: isFormData ? body : (body ? JSON.stringify(body) : undefined),
         });
+        if (!res.ok && res.status === 401) {
+            const sso = window.__TASKFLOW_SSO_DETAIL__ || {};
+            if (!!sso.moduleExchangeCompleted && !attemptedSessionRepair) {
+                attemptedSessionRepair = true;
+                const retryNoRepair = await fetch(BASE + url, {
+                    method, credentials: "include", headers,
+                    body: isFormData ? body : (body ? JSON.stringify(body) : undefined),
+                });
+                if (retryNoRepair.ok) {
+                    return retryNoRepair.status === 204 ? null : retryNoRepair.json();
+                }
+            }
+            const repaired = await repairSessionIfNeeded();
+            if (repaired) {
+                const retry = await fetch(BASE + url, {
+                    method, credentials: "include", headers,
+                    body: isFormData ? body : (body ? JSON.stringify(body) : undefined),
+                });
+                if (retry.ok) {
+                    return retry.status === 204 ? null : retry.json();
+                }
+            }
+        }
         if (!res.ok) {
             const t = await res.text(); let m = t;
             try { m = JSON.parse(t).message || t; } catch (_) {}

@@ -15,7 +15,7 @@
     <script>
         // ── Module configuration ──────────────────────────────────────────────
         // API base URL — this module's own origin for its own API calls
-        window.TASKFLOW_API_BASE = "{{ config('app.url') }}";
+        window.TASKFLOW_API_BASE = "";
 
         // Portal origin for SSO handshake — the parent portal that embeds this module
         window.PORTAL_ORIGIN = "{{ config('app.portal_url') }}";
@@ -23,8 +23,9 @@
         // SSO timeout (ms) — how long to wait for portal response before showing error
         window.SSO_TIMEOUT_MS = 8000;
 
-        // Use the standardized flow: module backend exchanges token with DEORIS.
-        window.DEORIS_SSO_MODE = "module";
+        // Use portal mode so module receives verified user directly from bridge.
+        // This avoids iframe CSRF races during rapid module switching.
+        window.DEORIS_SSO_MODE = "portal";
     </script>
 </head>
 <body>
